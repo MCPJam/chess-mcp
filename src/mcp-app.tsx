@@ -232,7 +232,6 @@ function ChessApp(): JSX.Element {
 
 function applyHostContext(): void {
   const context = app.getHostContext();
-  console.log("[chess-mcp] hostContext", context);
   if (context?.styles?.variables) {
     applyHostStyleVariables(context.styles.variables);
   }
@@ -440,7 +439,7 @@ app.registerTool(
 );
 
 app.addEventListener("toolresult", (params) => {
-  // If a server tool produced a fresh state (e.g. start_game), align local state.
+  // The host is the source of truth for game state across tool calls; trust it.
   const sc = params.structuredContent as Partial<BoardState> | undefined;
   if (!sc || typeof sc.fen !== "string") return;
   try {
@@ -468,7 +467,7 @@ try {
   await app.connect(new PostMessageTransport(window.parent, window.parent));
   bridgeConnected = true;
   applyHostContext();
-  void pushModelContext("initial app state");
+  publishState("initial app state");
 } catch {
   statusEl.textContent = "Could not connect to an MCP Apps host.";
 }
