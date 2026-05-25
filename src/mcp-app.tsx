@@ -186,15 +186,9 @@ function ChessApp(): JSX.Element {
         boardWidth={width}
         arePiecesDraggable={!snapshot.isGameOver}
         boardOrientation={boardOrientation}
-        customDarkSquareStyle={{ backgroundColor: "#7a5a3b" }}
-        customLightSquareStyle={{ backgroundColor: "#e9d3b1" }}
         customNotationStyle={{
           fontSize: "18px",
-          fontWeight: 800,
-          color: "#1a1208",
-          opacity: 1,
-          textShadow:
-            "0 0 3px rgba(255,255,255,0.9), 0 0 2px rgba(255,255,255,0.9)"
+          fontWeight: 800
         }}
       />
     </div>
