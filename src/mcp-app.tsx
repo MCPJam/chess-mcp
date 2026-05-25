@@ -188,7 +188,9 @@ function ChessApp(): JSX.Element {
         boardOrientation={boardOrientation}
         customNotationStyle={{
           fontSize: "18px",
-          fontWeight: 800
+          fontWeight: 800,
+          color: "#2a1a0a",
+          opacity: 1
         }}
       />
     </div>
