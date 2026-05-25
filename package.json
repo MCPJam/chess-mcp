@@ -1,0 +1,46 @@
+{
+  "name": "chess-mcp-app",
+  "version": "1.0.0",
+  "description": "Chess MCP App that exercises SEP-1865 App-Provided Tools + host-hardening features.",
+  "type": "module",
+  "main": "main.ts",
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "build:worker": "cross-env INPUT=mcp-app.html vite build",
+    "dev": "cross-env NODE_ENV=development concurrently \"cross-env INPUT=mcp-app.html vite build --watch\" \"tsx --watch main.ts\"",
+    "dev:worker": "npm run build:worker && wrangler dev",
+    "serve": "tsx main.ts",
+    "serve:stdio": "cross-env MCP_TRANSPORT=stdio tsx main.ts",
+    "deploy": "npm run build:worker && wrangler deploy"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.7.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "chess.js": "^1.0.0-beta.8",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "react": "^18.3.1",
+    "react-chessboard": "^4.7.2",
+    "react-dom": "^18.3.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250310.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.14",
+    "vite-plugin-singlefile": "^2.3.3",
+    "wrangler": "^4.0.0"
+  }
+}
