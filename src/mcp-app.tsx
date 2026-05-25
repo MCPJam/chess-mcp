@@ -63,6 +63,10 @@ const app = new App(
 
 const game = new Chess();
 let bridgeConnected = false;
+let activeHostToolId: string | null = null;
+let activeStorageKey: string | null = null;
+const acceptedServerToolResultIds = new Set<string>();
+const STORAGE_KEY_PREFIX = "chess-mcp:board-state:";
 
 function computeResult(g: Chess): Result {
   if (!g.isGameOver()) return null;
@@ -82,6 +86,91 @@ function getSemanticState(): BoardState {
     result: computeResult(game),
     moveHistory: game.history()
   };
+}
+
+function readHostToolId(): string {
+  const id = app.getHostContext()?.toolInfo?.id;
+  if (typeof id === "string" || typeof id === "number") return String(id);
+  return "unknown-tool";
+}
+
+function getStorageKeyForHostTool(toolId: string): string {
+  return `${STORAGE_KEY_PREFIX}${toolId}`;
+}
+
+function normalizeMoveHistory(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((move): move is string => typeof move === "string")
+    : [];
+}
+
+function saveStateToStorage(): void {
+  if (!activeStorageKey) return;
+  try {
+    localStorage.setItem(activeStorageKey, JSON.stringify(getSemanticState()));
+  } catch {
+    // ignore blocked storage
+  }
+}
+
+function readStoredState(storageKey: string): BoardState | null {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<BoardState>;
+    if (typeof parsed.fen !== "string") return null;
+    return {
+      fen: parsed.fen,
+      turn: parsed.turn === "b" ? "b" : "w",
+      inCheck: Boolean(parsed.inCheck),
+      isGameOver: Boolean(parsed.isGameOver),
+      result:
+        parsed.result === "white" ||
+        parsed.result === "black" ||
+        parsed.result === "draw"
+          ? parsed.result
+          : null,
+      moveHistory: normalizeMoveHistory(parsed.moveHistory)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function restoreBoardState(state: Pick<BoardState, "fen" | "moveHistory">): void {
+  const moveHistory = normalizeMoveHistory(state.moveHistory);
+  if (moveHistory.length > 0) {
+    try {
+      const replay = new Chess();
+      for (const move of moveHistory) replay.move(move);
+      if (replay.fen() === state.fen) {
+        game.reset();
+        for (const move of moveHistory) game.move(move);
+        return;
+      }
+    } catch {
+      // Fall back to FEN-only restore when historical SAN cannot be replayed.
+    }
+  }
+  game.load(state.fen);
+}
+
+function syncHostToolStorage(): boolean {
+  const hostToolId = readHostToolId();
+  if (hostToolId === activeHostToolId) return false;
+  activeHostToolId = hostToolId;
+  activeStorageKey = getStorageKeyForHostTool(hostToolId);
+
+  const stored = readStoredState(activeStorageKey);
+  if (!stored) return false;
+
+  try {
+    restoreBoardState(stored);
+    acceptedServerToolResultIds.add(hostToolId);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const statusEl = document.querySelector<HTMLParagraphElement>("#status")!;
@@ -150,6 +239,7 @@ async function pushModelContext(reason: string): Promise<void> {
 
 function publishState(reason: string): void {
   const snapshot = getSemanticState();
+  saveStateToStorage();
   renderStatus(snapshot);
   notify();
   void pushModelContext(reason);
@@ -441,10 +531,34 @@ app.registerTool(
 
 app.addEventListener("toolresult", (params) => {
   // If a server tool produced a fresh state (e.g. start_game), align local state.
+  syncHostToolStorage();
   const sc = params.structuredContent as Partial<BoardState> | undefined;
   if (!sc || typeof sc.fen !== "string") return;
+  const hostToolId = activeHostToolId ?? readHostToolId();
+  const moveHistory = normalizeMoveHistory(sc.moveHistory);
+  const incomingHistoryLength = moveHistory.length;
+  const currentHistoryLength = game.history().length;
+  const storedHistoryLength = activeStorageKey
+    ? readStoredState(activeStorageKey)?.moveHistory.length ?? 0
+    : 0;
+  const alreadyAcceptedThisToolResult =
+    acceptedServerToolResultIds.has(hostToolId);
+  if (
+    (alreadyAcceptedThisToolResult ||
+      storedHistoryLength > incomingHistoryLength) &&
+    incomingHistoryLength < currentHistoryLength
+  ) {
+    console.debug("[chess-mcp] ignoring stale server tool result", {
+      hostToolId,
+      incomingHistoryLength,
+      currentHistoryLength,
+      storedHistoryLength
+    });
+    return;
+  }
   try {
-    game.load(sc.fen);
+    restoreBoardState({ fen: sc.fen, moveHistory });
+    acceptedServerToolResultIds.add(hostToolId);
     publishState("server tool result");
   } catch {
     // ignore bad FEN from server tool
@@ -453,6 +567,9 @@ app.addEventListener("toolresult", (params) => {
 
 app.addEventListener("hostcontextchanged", () => {
   applyHostContext();
+  if (syncHostToolStorage()) {
+    publishState("restored stored state");
+  }
 });
 
 app.onteardown = async () => ({});
@@ -468,7 +585,11 @@ try {
   await app.connect(new PostMessageTransport(window.parent, window.parent));
   bridgeConnected = true;
   applyHostContext();
-  void pushModelContext("initial app state");
+  if (syncHostToolStorage()) {
+    publishState("restored stored state");
+  } else {
+    publishState("initial app state");
+  }
 } catch {
   statusEl.textContent = "Could not connect to an MCP Apps host.";
 }
