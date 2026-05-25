@@ -232,13 +232,17 @@ function ChessApp(): JSX.Element {
 
 function applyHostContext(): void {
   const context = app.getHostContext();
+  console.log("[chess-mcp] hostContext", context);
   if (context?.styles?.variables) {
     applyHostStyleVariables(context.styles.variables);
   }
   if (context?.styles?.css?.fonts) {
     applyHostFonts(context.styles.css.fonts);
   }
-  applyDocumentTheme(context?.theme);
+  // Hosts may omit `theme`. Without a value the SDK leaves `color-scheme`
+  // unset, so `light-dark()` in global.css follows the user's OS preference
+  // and looks dark even when the host chrome is light. Default to light.
+  applyDocumentTheme(context?.theme ?? "light");
 }
 
 // App tools — semantic surface the model can call to introspect / drive the game.
