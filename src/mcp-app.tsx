@@ -27,6 +27,32 @@ type BoardState = {
 const INITIAL_FEN =
   "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
+const MODEL_COLOR: Turn = "b";
+const USER_COLOR: Turn = "w";
+const MODEL_COLOR_NAME = "Black";
+const USER_COLOR_NAME = "White";
+const IDENTITY_LINE = `You are playing ${MODEL_COLOR_NAME} (lowercase pieces in FEN). The user is ${USER_COLOR_NAME} (uppercase pieces in FEN).`;
+
+function asciiBoard(fen: string): string {
+  const placement = fen.split(" ")[0] ?? "";
+  const ranks = placement.split("/");
+  const lines: string[] = [];
+  for (let i = 0; i < ranks.length; i++) {
+    const rankNumber = 8 - i;
+    let line = `${rankNumber} `;
+    for (const ch of ranks[i]) {
+      if (/[1-8]/.test(ch)) {
+        line += ". ".repeat(Number(ch));
+      } else {
+        line += `${ch} `;
+      }
+    }
+    lines.push(line.trimEnd());
+  }
+  lines.push("  a b c d e f g h");
+  return lines.join("\n");
+}
+
 const app = new App(
   { name: "Chess", version: "0.1.0" },
   {
@@ -96,19 +122,26 @@ function useGameSnapshot(): BoardState {
 async function pushModelContext(reason: string): Promise<void> {
   if (!bridgeConnected) return;
   const semanticState = getSemanticState();
+  const toMove = semanticState.turn === MODEL_COLOR ? "you" : "the user";
   try {
     await app.updateModelContext({
       content: [
         {
           type: "text",
           text:
-            `Chess state (${reason}): fen=${semanticState.fen}; turn=${semanticState.turn};` +
+            `${IDENTITY_LINE}\n` +
+            `Chess state (${reason}): fen=${semanticState.fen}; turn=${semanticState.turn} (${toMove} to move);` +
             ` inCheck=${semanticState.inCheck}; gameOver=${semanticState.isGameOver};` +
             ` result=${semanticState.result ?? "none"};` +
-            ` history=${semanticState.moveHistory.join(" ")}`
+            ` history=${semanticState.moveHistory.join(" ")}\n` +
+            `Board (uppercase=${USER_COLOR_NAME}/user, lowercase=${MODEL_COLOR_NAME}/you):\n${asciiBoard(semanticState.fen)}`
         }
       ],
-      structuredContent: semanticState
+      structuredContent: {
+        ...semanticState,
+        youArePlaying: MODEL_COLOR,
+        userIsPlaying: USER_COLOR
+      }
     });
   } catch {
     // ignore
@@ -125,15 +158,15 @@ function publishState(reason: string): void {
 async function promptModelToMove(playedSan: string): Promise<void> {
   if (!bridgeConnected) return;
   if (game.isGameOver()) return;
-  const nextSide = game.turn() === "w" ? "White" : "Black";
   try {
     await app.sendMessage({
       role: "user",
       content: {
         type: "text",
         text:
-          `I just played ${playedSan}. Your turn — play ${nextSide} by calling make_move` +
-          ` with a legal SAN (e.g. "e5", "Nf6") or { from, to, promotion? }.`
+          `${IDENTITY_LINE}\n` +
+          `I (${USER_COLOR_NAME}) just played ${playedSan}. It is now your turn as ${MODEL_COLOR_NAME}.` +
+          ` Call make_move with a legal SAN (e.g. "e5", "Nf6") or { from, to, promotion? }.`
       }
     });
   } catch {
@@ -227,14 +260,22 @@ app.registerTool(
   },
   async () => {
     const state = getSemanticState();
+    const toMove = state.turn === MODEL_COLOR ? "you" : "the user";
     return {
       content: [
         {
           type: "text",
-          text: `FEN: ${state.fen} | turn: ${state.turn} | check: ${state.inCheck} | result: ${state.result ?? "ongoing"}`
+          text:
+            `${IDENTITY_LINE}\n` +
+            `FEN: ${state.fen} | turn: ${state.turn} (${toMove} to move) | check: ${state.inCheck} | result: ${state.result ?? "ongoing"}\n` +
+            `Board (uppercase=${USER_COLOR_NAME}/user, lowercase=${MODEL_COLOR_NAME}/you):\n${asciiBoard(state.fen)}`
         }
       ],
-      structuredContent: state
+      structuredContent: {
+        ...state,
+        youArePlaying: MODEL_COLOR,
+        userIsPlaying: USER_COLOR
+      }
     };
   }
 );
@@ -347,16 +388,25 @@ app.registerTool(
     }
     publishState(`app tool make_move ${played.san}`);
     const state = getSemanticState();
+    const toMove = state.turn === MODEL_COLOR ? "you" : "the user";
     return {
       content: [
         {
           type: "text",
-          text: state.isGameOver
-            ? `Played ${played.san}. ${state.result === "draw" ? "Draw." : `${state.result} wins!`}`
-            : `Played ${played.san}. Turn: ${state.turn === "w" ? "White" : "Black"}${state.inCheck ? " (check)" : ""}.`
+          text:
+            `${IDENTITY_LINE}\n` +
+            (state.isGameOver
+              ? `Played ${played.san}. ${state.result === "draw" ? "Draw." : `${state.result} wins!`}`
+              : `Played ${played.san}. Turn: ${state.turn === "w" ? "White" : "Black"} (${toMove} to move)${state.inCheck ? " (check)" : ""}.`) +
+            `\nBoard (uppercase=${USER_COLOR_NAME}/user, lowercase=${MODEL_COLOR_NAME}/you):\n${asciiBoard(state.fen)}`
         }
       ],
-      structuredContent: { ...state, sanPlayed: played.san }
+      structuredContent: {
+        ...state,
+        sanPlayed: played.san,
+        youArePlaying: MODEL_COLOR,
+        userIsPlaying: USER_COLOR
+      }
     };
   }
 );
