@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "types": ["node", "vite/client"]
+    "types": ["node", "vite/client", "webmcp-types"]
   },
   "include": ["*.ts", "src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["src/worker.ts"]

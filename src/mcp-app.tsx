@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Chessboard } from "react-chessboard";
-import { Chess, type Square } from "chess.js";
+import { Chess } from "chess.js";
+import { createChessViewTools } from "./chess-view-tools.js";
 import {
   App,
   PostMessageTransport,
@@ -9,7 +10,6 @@ import {
   applyHostFonts,
   applyHostStyleVariables
 } from "@modelcontextprotocol/ext-apps";
-import { z } from "zod";
 import "./global.css";
 
 type Turn = "w" | "b";
@@ -56,7 +56,6 @@ function asciiBoard(fen: string): string {
 const app = new App(
   { name: "Chess", version: "0.1.0" },
   {
-    tools: { listChanged: true },
     availableDisplayModes: ["inline", "fullscreen"]
   }
 );
@@ -244,199 +243,8 @@ function applyHostContext(): void {
   applyDocumentTheme(context?.theme ?? "light");
 }
 
-// App tools — semantic surface the model can call to introspect / drive the game.
-
-app.registerTool(
-  "get_board_state",
-  {
-    description:
-      "Get the current chess board (FEN), whose turn it is, whether the side to move is in check, and the result if the game is over.",
-    outputSchema: z.object({
-      fen: z.string(),
-      turn: z.enum(["w", "b"]),
-      inCheck: z.boolean(),
-      isGameOver: z.boolean(),
-      result: z.union([z.enum(["white", "black", "draw"]), z.null()]),
-      moveHistory: z.array(z.string())
-    }),
-    annotations: { readOnlyHint: true }
-  },
-  async () => {
-    const state = getSemanticState();
-    const toMove = state.turn === MODEL_COLOR ? "you" : "the user";
-    return {
-      content: [
-        {
-          type: "text",
-          text:
-            `${IDENTITY_LINE}\n` +
-            `FEN: ${state.fen} | turn: ${state.turn} (${toMove} to move) | check: ${state.inCheck} | result: ${state.result ?? "ongoing"}\n` +
-            `Board (uppercase=${USER_COLOR_NAME}/user, lowercase=${MODEL_COLOR_NAME}/you):\n${asciiBoard(state.fen)}`
-        }
-      ],
-      structuredContent: {
-        ...state,
-        youArePlaying: MODEL_COLOR,
-        userIsPlaying: USER_COLOR
-      }
-    };
-  }
-);
-
-app.registerTool(
-  "get_legal_moves",
-  {
-    description:
-      "List all legal moves for the side to move (in SAN). Optionally filter by `from` square (e.g. 'e2').",
-    inputSchema: z.object({
-      from: z.string().min(2).max(2).optional()
-    }),
-    outputSchema: z.object({
-      turn: z.enum(["w", "b"]),
-      moves: z.array(
-        z.object({
-          san: z.string(),
-          from: z.string(),
-          to: z.string(),
-          promotion: z.string().optional()
-        })
-      )
-    }),
-    annotations: { readOnlyHint: true }
-  },
-  async ({ from }) => {
-    const verbose = game.moves({ verbose: true, square: from as Square | undefined }) as Array<{
-      san: string;
-      from: string;
-      to: string;
-      promotion?: string;
-    }>;
-    const moves = verbose.map((m) => ({
-      san: m.san,
-      from: m.from,
-      to: m.to,
-      promotion: m.promotion
-    }));
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Legal moves (${moves.length}): ${moves.map((m) => m.san).join(", ") || "none"}`
-        }
-      ],
-      structuredContent: {
-        turn: game.turn() as Turn,
-        moves
-      }
-    };
-  }
-);
-
-app.registerTool(
-  "make_move",
-  {
-    description:
-      "Play a chess move. Provide either `san` (e.g. 'e4', 'Nf3', 'O-O', 'exd5') or { from, to, promotion? }. The move must be legal for the side to move.",
-    inputSchema: z
-      .object({
-        san: z.string().optional(),
-        from: z.string().min(2).max(2).optional(),
-        to: z.string().min(2).max(2).optional(),
-        promotion: z.enum(["q", "r", "b", "n"]).optional()
-      })
-      .refine(
-        (v) => Boolean(v.san) || (Boolean(v.from) && Boolean(v.to)),
-        { message: "provide either `san` or both `from` and `to`" }
-      ),
-    outputSchema: z.object({
-      fen: z.string(),
-      turn: z.enum(["w", "b"]),
-      inCheck: z.boolean(),
-      isGameOver: z.boolean(),
-      result: z.union([z.enum(["white", "black", "draw"]), z.null()]),
-      moveHistory: z.array(z.string()),
-      sanPlayed: z.string()
-    }),
-    annotations: { readOnlyHint: false }
-  },
-  async ({ san, from, to, promotion }) => {
-    if (game.isGameOver()) {
-      return {
-        content: [{ type: "text", text: "move failed: game is over" }],
-        isError: true
-      };
-    }
-    let played: { san: string } | null = null;
-    try {
-      if (san) {
-        const m = game.move(san);
-        played = m ? { san: m.san } : null;
-      } else if (from && to) {
-        const m = game.move({ from, to, promotion: promotion ?? "q" });
-        played = m ? { san: m.san } : null;
-      }
-    } catch {
-      played = null;
-    }
-    if (!played) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `move failed: not a legal move (${san ?? `${from}->${to}`})`
-          }
-        ],
-        isError: true
-      };
-    }
-    publishState(`app tool make_move ${played.san}`);
-    const state = getSemanticState();
-    const toMove = state.turn === MODEL_COLOR ? "you" : "the user";
-    return {
-      content: [
-        {
-          type: "text",
-          text:
-            `${IDENTITY_LINE}\n` +
-            (state.isGameOver
-              ? `Played ${played.san}. ${state.result === "draw" ? "Draw." : `${state.result} wins!`}`
-              : `Played ${played.san}. Turn: ${state.turn === "w" ? "White" : "Black"} (${toMove} to move)${state.inCheck ? " (check)" : ""}.`) +
-            `\nBoard (uppercase=${USER_COLOR_NAME}/user, lowercase=${MODEL_COLOR_NAME}/you):\n${asciiBoard(state.fen)}`
-        }
-      ],
-      structuredContent: {
-        ...state,
-        sanPlayed: played.san,
-        youArePlaying: MODEL_COLOR,
-        userIsPlaying: USER_COLOR
-      }
-    };
-  }
-);
-
-app.registerTool(
-  "reset_game",
-  {
-    description: "Reset the chess board to the standard starting position with White to move.",
-    outputSchema: z.object({
-      fen: z.string(),
-      turn: z.enum(["w", "b"]),
-      inCheck: z.boolean(),
-      isGameOver: z.boolean(),
-      result: z.union([z.enum(["white", "black", "draw"]), z.null()]),
-      moveHistory: z.array(z.string())
-    }),
-    annotations: { readOnlyHint: false }
-  },
-  async () => {
-    game.reset();
-    publishState("app tool reset_game");
-    return {
-      content: [{ type: "text", text: "Game reset. White moves first." }],
-      structuredContent: getSemanticState()
-    };
-  }
-);
+// Registration lifetime follows the app's teardown.
+const toolLifetime = new AbortController();
 
 app.addEventListener("toolresult", (params) => {
   // The host is the source of truth for game state across tool calls; trust it.
@@ -454,7 +262,10 @@ app.addEventListener("hostcontextchanged", () => {
   applyHostContext();
 });
 
-app.onteardown = async () => ({});
+app.onteardown = async () => {
+  toolLifetime.abort();
+  return {};
+};
 
 const rootEl = document.querySelector<HTMLDivElement>("#root")!;
 createRoot(rootEl).render(<ChessApp />);
@@ -465,6 +276,14 @@ game.load(INITIAL_FEN);
 
 try {
   await app.connect(new PostMessageTransport(window.parent, window.parent));
+  if (document.modelContext) {
+    for (const tool of createChessViewTools({
+      game, getState: getSemanticState, publishState, identity: IDENTITY_LINE,
+      asciiBoard
+    })) {
+      await document.modelContext.registerTool(tool, { signal: toolLifetime.signal });
+    }
+  }
   bridgeConnected = true;
   applyHostContext();
   publishState("initial app state");
